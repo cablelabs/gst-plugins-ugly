@@ -719,7 +719,10 @@ gst_asf_demux_handle_seek_event (GstASFDemux * demux, GstEvent * event)
   GST_DEBUG_OBJECT (demux, "seeking to time %" GST_TIME_FORMAT ", segment: "
       "%" GST_SEGMENT_FORMAT, GST_TIME_ARGS (segment.start), &segment);
 
-  seek_time = segment.start;
+  if (cur_type != GST_SEEK_TYPE_SET)
+    seek_time = segment.start;
+  else
+    seek_time = cur;
 
   /* FIXME: should check the KEY_UNIT flag; need to adjust position to
    * real start of data and segment_start to indexed time for key unit seek*/
@@ -1314,6 +1317,23 @@ gst_asf_demux_have_mutually_exclusive_active_stream (GstASFDemux * demux,
 }
 #endif
 
+static void
+gst_asf_demux_check_segment_ts (GstASFDemux * demux, GstClockTime payload_ts)
+{
+  /* remember the first queued timestamp for the segment */
+  if (G_UNLIKELY (!GST_CLOCK_TIME_IS_VALID (demux->segment_ts) &&
+          GST_CLOCK_TIME_IS_VALID (demux->first_ts))) {
+    GST_DEBUG_OBJECT (demux, "segment ts: %" GST_TIME_FORMAT,
+        GST_TIME_ARGS (demux->first_ts));
+    demux->segment_ts = payload_ts;
+    /* always note, but only determines segment when streaming */
+    if (demux->streaming)
+      gst_segment_do_seek (&demux->segment, demux->in_segment.rate,
+          GST_FORMAT_TIME, (GstSeekFlags) demux->segment.flags,
+          GST_SEEK_TYPE_SET, demux->segment_ts, GST_SEEK_TYPE_NONE, 0, NULL);
+  }
+}
+
 static gboolean
 gst_asf_demux_check_first_ts (GstASFDemux * demux, gboolean force)
 {
@@ -1367,6 +1387,8 @@ gst_asf_demux_check_first_ts (GstASFDemux * demux, gboolean force)
       }
     }
   }
+
+  gst_asf_demux_check_segment_ts (demux, 0);
 
   return TRUE;
 }
@@ -1505,6 +1527,11 @@ gst_asf_demux_find_stream_with_complete_payload (GstASFDemux * demux)
               || !GST_CLOCK_TIME_IS_VALID (payload->ts)); --last_idx) {
         payload = &g_array_index (stream->payloads, AsfPayload, last_idx);
       }
+
+      /* if this is first payload after seek we might need to update the segment */
+      if (GST_CLOCK_TIME_IS_VALID (payload->ts))
+        gst_asf_demux_check_segment_ts (demux, payload->ts);
+
       if (G_UNLIKELY (GST_CLOCK_TIME_IS_VALID (payload->ts) &&
               (payload->ts < demux->segment.start))) {
         if (G_UNLIKELY ((!demux->accurate) && payload->keyframe)) {
@@ -1558,13 +1585,13 @@ gst_asf_demux_push_complete_payloads (GstASFDemux * demux, gboolean force)
     /* streams are now activated */
   }
 
-  /* wait until we had a chance to "lock on" some payload's timestamp */
-  if (G_UNLIKELY (demux->need_newsegment
-          && !GST_CLOCK_TIME_IS_VALID (demux->segment_ts)))
-    return GST_FLOW_OK;
-
   while ((stream = gst_asf_demux_find_stream_with_complete_payload (demux))) {
     AsfPayload *payload;
+
+    /* wait until we had a chance to "lock on" some payload's timestamp */
+    if (G_UNLIKELY (demux->need_newsegment
+            && !GST_CLOCK_TIME_IS_VALID (demux->segment_ts)))
+      return GST_FLOW_OK;
 
     payload = &g_array_index (stream->payloads, AsfPayload, 0);
 
@@ -3547,8 +3574,13 @@ gst_asf_demux_process_simple_index (GstASFDemux * demux, guint8 * data,
     demux->sidx_entries = g_new0 (AsfSimpleIndexEntry, count);
 
     for (i = 0; i < count; ++i) {
-      if (G_UNLIKELY (size <= 6))
+      if (G_UNLIKELY (size < 6)) {
+        /* adjust for broken files, to avoid having entries at the end
+         * of the parsed index that point to time=0. Resulting in seeking to
+         * the end of the file leading back to the beginning */
+        demux->sidx_num_entries -= (count - i);
         break;
+      }
       demux->sidx_entries[i].packet = gst_asf_demux_get_uint32 (&data, &size);
       demux->sidx_entries[i].count = gst_asf_demux_get_uint16 (&data, &size);
       GST_LOG_OBJECT (demux, "%" GST_TIME_FORMAT " = packet %4u  count : %2d",
