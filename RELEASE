@@ -1,7 +1,7 @@
 
-Release notes for GStreamer Ugly Plugins 1.1.4
+Release notes for GStreamer Ugly Plugins 1.2.0
 
-The GStreamer team is proud to announce a new bug-fix release
+The GStreamer team is proud to announce a new feature release
 in the 1.x stable series of the
 core of the GStreamer streaming media framework.
 
@@ -58,8 +58,7 @@ contains a set of codecs plugins based on libav (formerly gst-ffmpeg)
 
 Bugs fixed in this release
      
-      * 705026 : asfdemux: add support dvr-ms files
-      * 705153 : regression: asfdemux: cannot seek in push mode any longer
+      * 708036 : x264enc: Update documentation to specify default profile if no constraints are given
 
 ==== Download ====
 
@@ -96,9 +95,8 @@ subscribe to the gstreamer-devel list.
         
 Contributors to this release
     
+      * Andoni Morales Alastruey
       * Edward Hervey
-      * Lubosz Sarnecki
-      * Matej Knopp
       * Sebastian Dröge
       * Tim-Philipp Müller
  
